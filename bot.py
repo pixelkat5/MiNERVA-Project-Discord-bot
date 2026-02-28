@@ -1,6 +1,7 @@
 import discord
 import aiohttp
 import os
+import re
 
 TOKEN = os.environ["DISCORD_TOKEN"]
 URL = "https://minerva-archive.org/"
@@ -34,7 +35,7 @@ async def on_message(message):
 
     content = message.content.lower()
 
-    if any(keyword in content for keyword in DOWN_KEYWORDS):
+    if any(re.search(r'\b' + re.escape(keyword) + r'\b', content) for keyword in DOWN_KEYWORDS):
         is_up = await check_site()
         if not is_up:
             await message.reply("Be patient -_-")

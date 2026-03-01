@@ -1,38 +1,39 @@
 import discord
+from discord.ext import commands
+from discord import app_commands
 import aiohttp
 import asyncio
 import os
 import re
+import time
+import datetime
 
 TOKEN = os.environ["DISCORD_TOKEN"]
 URL = "https://minerva-archive.org/"
 LEADERBOARD_API = "https://minerva-archive.org/api/leaderboard"
 
-# Primary trigger words
 DOWN_KEYWORDS = [
     "down", "offline", "not working", "broken", "unreachable",
     "cant access", "can't access", "unavailable", "not loading",
     "wont load", "won't load", "dead"
 ]
 
-# Up keywords
 UP_KEYWORDS = [
     "up", "working", "online", "accessible"
 ]
 
-# Must also contain one of these to confirm they're talking about the site
 SITE_KEYWORDS = [
     "site", "minerva", "archive", "page", "website", "server"
 ]
 
-intents = discord.Intents.default()
-intents.message_content = True
-client = discord.Client(intents=intents)
-
-# Cache
 _leaderboard_cache = None
 _leaderboard_cache_time = 0
-CACHE_TTL = 300  # 5 minutes
+CACHE_TTL = 300
+
+intents = discord.Intents.default()
+intents.message_content = True
+
+bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 async def check_site():
     try:
@@ -44,7 +45,6 @@ async def check_site():
 
 async def fetch_all_leaderboard():
     global _leaderboard_cache, _leaderboard_cache_time
-    import time
     if _leaderboard_cache and (time.time() - _leaderboard_cache_time) < CACHE_TTL:
         return _leaderboard_cache
     entries = []
@@ -63,7 +63,6 @@ async def fetch_all_leaderboard():
                 if len(batch) < limit:
                     break
                 offset += limit
-    import time
     _leaderboard_cache = entries
     _leaderboard_cache_time = time.time()
     return entries
@@ -97,6 +96,26 @@ def build_leaderboard_page(entries, page, per_page=10):
         lines.append(f"#{e['rank']} **{e['discord_username']}** - {e['total_files']:,} files, {bytes_to_human(e['total_bytes'])}")
     return "\n".join(lines), total_pages
 
+HELP_TEXT = (
+    "**Minerva Bot Commands:**\n"
+    "`!ping` - Check bot latency\n"
+    "`!status` - Check if the site is up\n"
+    "`!time` - Time left until Myrient deadline\n"
+    "`!sheet` - Link to the tracking spreadsheet\n"
+    "`!python / !bot` - Link to the bot source\n"
+    "`!source / !sourcecode` - Link to the bot GitHub repo\n"
+    "`!remind 1h30m (message)` - Set a reminder (supports h/m/s, max 24h)\n"
+    "`!rank` - See your leaderboard rank\n"
+    "`!rank (username)` - See someone else's rank\n"
+    "`!rank list` - Browse the leaderboard with buttons\n"
+    "`!rank data / !rank files` - Your data or file count\n"
+    "`!rank data (user) / !rank files (user)` - Someone else's data or file count\n"
+    "`!stats` - See your full stats\n"
+    "`!stats files` - See your file count\n"
+    "`!stats data` - See your data amount\n"
+    "`!help / !list / !cmd / !command` - Show this list\n"
+)
+
 class LeaderboardView(discord.ui.View):
     def __init__(self, entries, page, total_pages, author_id):
         super().__init__(timeout=60)
@@ -113,7 +132,7 @@ class LeaderboardView(discord.ui.View):
     @discord.ui.button(label="< Prev", style=discord.ButtonStyle.secondary)
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.author_id:
-            await interaction.response.defer()
+            await interaction.response.send_message("These buttons are only for the person who ran this command.", ephemeral=True)
             return
         self.page -= 1
         self.update_buttons()
@@ -123,7 +142,7 @@ class LeaderboardView(discord.ui.View):
     @discord.ui.button(label="Next >", style=discord.ButtonStyle.secondary)
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.author_id:
-            await interaction.response.defer()
+            await interaction.response.send_message("These buttons are only for the person who ran this command.", ephemeral=True)
             return
         self.page += 1
         self.update_buttons()
@@ -134,183 +153,181 @@ class LeaderboardView(discord.ui.View):
         for item in self.children:
             item.disabled = True
 
-HELP_TEXT = (
-    "**Minerva Bot Commands:**\n"
-    "`!ping` - Check bot latency\n"
-    "`!status` - Check if the site is up\n"
-    "`!time` - Time left until Myrient deadline\n"
-    "`!sheet` - Link to the tracking spreadsheet\n"
-    "`!remind 1h30m (message)` - Set a reminder (supports h/m/s, max 24h)\n"
-    "`!rank` - See your leaderboard rank\n"
-    "`!rank (username)` - See someone else's rank\n"
-    "`!rank list` - Browse the leaderboard with buttons\n"
-    "`!rank data / !rank files` - Your data or file count\n"
-    "`!rank data (user) / !rank files (user)` - Someone else's data or file count\n"
-    "`!stats` - See your full stats\n"
-    "`!stats files` - See your file count\n"
-    "`!stats data` - See your data amount\n"
-    "`!help / !list / !cmd / !command` - Show this list\n"
-)
-
-@client.event
+@bot.event
 async def on_ready():
-    print(f"Logged in as {client.user}")
+    await bot.tree.sync()
+    print(f"Logged in as {bot.user}")
 
-@client.event
-async def on_message(message):
-    if message.author == client.user:
+@bot.hybrid_command(name="ping", description="Check bot latency")
+async def ping(ctx):
+    latency = round(bot.latency * 1000)
+    await ctx.reply(f"Pong! `{latency}ms`")
+
+@bot.hybrid_command(name="status", description="Check if the site is up")
+async def status(ctx):
+    is_up = await check_site()
+    await ctx.reply("The site is up." if is_up else "The site is down.")
+
+@bot.hybrid_command(name="time", description="Time left until Myrient deadline")
+async def time_cmd(ctx):
+    deadline = datetime.datetime(2025, 3, 31, tzinfo=datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    if now < deadline:
+        timestamp = int(deadline.timestamp())
+        await ctx.reply(f"Myrient deadline: <t:{timestamp}:F> (<t:{timestamp}:R>)")
+    else:
+        await ctx.reply("The deadline has already passed.")
+
+@bot.hybrid_command(name="sheet", description="Link to the tracking spreadsheet")
+async def sheet(ctx):
+    await ctx.reply("https://docs.google.com/spreadsheets/d/1FYHw-QYXnKFuzUhIZCIe3mmg8HR7ftg2sV9Ec_9cDwU/")
+
+@bot.hybrid_command(name="python", description="Link to the bot source code")
+async def python_cmd(ctx):
+    await ctx.reply("https://gist.github.com/rlaphoenix/257b7aa65adacc154d8b5fa0b035b1e8")
+
+@bot.command(name="bot")
+async def bot_cmd(ctx):
+    await ctx.reply("https://gist.github.com/rlaphoenix/257b7aa65adacc154d8b5fa0b035b1e8")
+
+@bot.hybrid_command(name="source", description="Link to the bot source code")
+async def source_cmd(ctx):
+    await ctx.reply("https://github.com/pixelkat5/MiNERVA-Project-Discord-bot")
+
+@bot.command(name="sourcecode")
+async def sourcecode_cmd(ctx):
+    await ctx.reply("https://github.com/pixelkat5/MiNERVA-Project-Discord-bot")
+
+@bot.hybrid_command(name="remind", description="Set a reminder")
+@app_commands.describe(reminder="e.g. 1h30m do the thing")
+async def remind(ctx, *, reminder: str):
+    time_match = re.match(r'^((?:\d+h)?(?:\d+m)?(?:\d+s)?)\s*(.*)?$', reminder.strip(), re.IGNORECASE)
+    if not time_match or not time_match.group(1):
+        await ctx.reply("Couldn't parse that time. Try something like `!remind 1h`, `!remind 30m`, `!remind 1h30m10s`")
         return
+    time_str = time_match.group(1)
+    remind_msg = time_match.group(2).strip() if time_match.group(2) else None
+    hours = int(h.group(1)) if (h := re.search(r'(\d+)h', time_str, re.I)) else 0
+    minutes = int(m.group(1)) if (m := re.search(r'(\d+)m', time_str, re.I)) else 0
+    seconds = int(s.group(1)) if (s := re.search(r'(\d+)s', time_str, re.I)) else 0
+    total_seconds = hours * 3600 + minutes * 60 + seconds
+    if total_seconds <= 0:
+        await ctx.reply("Time must be greater than 0.")
+        return
+    if total_seconds > 86400:
+        await ctx.reply("Max reminder time is 24 hours.")
+        return
+    parts_str = []
+    if hours: parts_str.append(f"{hours}h")
+    if minutes: parts_str.append(f"{minutes}m")
+    if seconds: parts_str.append(f"{seconds}s")
+    await ctx.reply(f"Got it! Reminding you in {''.join(parts_str)}.")
+    async def send_reminder():
+        await asyncio.sleep(total_seconds)
+        reminder_text = f"{ctx.author.mention}, reminder!"
+        if remind_msg:
+            reminder_text += f" {remind_msg}"
+        await ctx.channel.send(reminder_text)
+    asyncio.create_task(send_reminder())
+
+@bot.hybrid_command(name="rank", description="See leaderboard rank")
+@app_commands.describe(args="username, 'list', 'data', or 'files' optionally followed by username")
+async def rank(ctx, *, args: str = None):
+    try:
+        entries = await fetch_all_leaderboard()
+    except Exception:
+        await ctx.reply("Couldn't reach the leaderboard API right now.")
+        return
+
+    subcommand = None
+
+    if args:
+        arg_parts = args.split(None, 1)
+        first = arg_parts[0].lower()
+        if first == "list":
+            page = 1
+            if len(arg_parts) > 1 and arg_parts[1].isdigit():
+                page = int(arg_parts[1])
+            page_content, total_pages = build_leaderboard_page(entries, page)
+            view = LeaderboardView(entries, page, total_pages, ctx.author.id)
+            await ctx.reply(page_content, view=view)
+            return
+        elif first in ["data", "files", "file"]:
+            subcommand = first
+            if len(arg_parts) > 1:
+                entry = find_user(entries, arg_parts[1])
+            else:
+                entry = find_user_with_fallback(entries, ctx.author)
+        else:
+            entry = find_user(entries, args)
+    else:
+        entry = find_user_with_fallback(entries, ctx.author)
+
+    if not entry:
+        await ctx.reply("Couldn't find that user on the leaderboard.")
+        return
+
+    if subcommand == "data":
+        await ctx.reply(f"**{entry['discord_username']}** has archived **{bytes_to_human(entry['total_bytes'])}** of data.")
+    elif subcommand in ["files", "file"]:
+        await ctx.reply(f"**{entry['discord_username']}** has archived **{entry['total_files']:,} files**.")
+    else:
+        await ctx.reply(
+            f"**{entry['discord_username']}** is rank **#{entry['rank']}** "
+            f"with {entry['total_files']:,} files and {bytes_to_human(entry['total_bytes'])} archived."
+        )
+
+@bot.hybrid_command(name="stats", description="See your archive stats")
+@app_commands.describe(filter="'files' or 'data'")
+async def stats(ctx, filter: str = None):
+    try:
+        entries = await fetch_all_leaderboard()
+    except Exception:
+        await ctx.reply("Couldn't reach the leaderboard API right now.")
+        return
+
+    entry = find_user_with_fallback(entries, ctx.author)
+
+    if not entry:
+        await ctx.reply("Couldn't find you on the leaderboard.")
+        return
+
+    if filter and filter.lower() == "files":
+        await ctx.reply(f"**{entry['discord_username']}** has archived **{entry['total_files']:,} files**.")
+    elif filter and filter.lower() == "data":
+        await ctx.reply(f"**{entry['discord_username']}** has archived **{bytes_to_human(entry['total_bytes'])}** of data.")
+    else:
+        await ctx.reply(
+            f"Stats for **{entry['discord_username']}**:\n"
+            f"Rank: **#{entry['rank']}**\n"
+            f"Files: **{entry['total_files']:,}**\n"
+            f"Data: **{bytes_to_human(entry['total_bytes'])}**"
+        )
+
+@bot.hybrid_command(name="help", description="Show all commands")
+async def help_cmd(ctx):
+    await ctx.reply(HELP_TEXT)
+
+@bot.command(name="list")
+async def list_cmd(ctx):
+    await ctx.reply(HELP_TEXT)
+
+@bot.command(name="cmd")
+async def cmd_cmd(ctx):
+    await ctx.reply(HELP_TEXT)
+
+@bot.command(name="command")
+async def command_cmd(ctx):
+    await ctx.reply(HELP_TEXT)
+
+@bot.event
+async def on_message(message):
+    if message.author == bot.user:
+        return
+
+    await bot.process_commands(message)
 
     content = message.content.lower().strip()
-    parts = message.content.strip().split(None, 1)
-    command = parts[0].lower() if parts else ""
-    arg = parts[1].strip() if len(parts) > 1 else None
-
-    # !ping
-    if content == "!ping":
-        latency = round(client.latency * 1000)
-        await message.reply(f"Pong! `{latency}ms`")
-        return
-
-    # !status
-    if content == "!status":
-        is_up = await check_site()
-        if is_up:
-            await message.reply("The site is up.")
-        else:
-            await message.reply("The site is down.")
-        return
-
-    # !time
-    if content == "!time":
-        import datetime
-        deadline = datetime.datetime(2025, 3, 31, tzinfo=datetime.timezone.utc)
-        now = datetime.datetime.now(datetime.timezone.utc)
-        if now < deadline:
-            timestamp = int(deadline.timestamp())
-            await message.reply(f"Myrient deadline: <t:{timestamp}:F> (<t:{timestamp}:R>)")
-        else:
-            await message.reply("The deadline has already passed.")
-        return
-
-    # !sheet
-    if content == "!sheet":
-        await message.reply("https://docs.google.com/spreadsheets/d/1FYHw-QYXnKFuzUhIZCIe3mmg8HR7ftg2sV9Ec_9cDwU/")
-        return
-
-    # !remind
-    if command == "!remind":
-        if not arg:
-            await message.reply("Usage: `!remind 1h30m do the thing` - supports h, m, s")
-            return
-        time_match = re.match(r'^((?:\d+h)?(?:\d+m)?(?:\d+s)?)\s*(.*)?$', arg.strip(), re.IGNORECASE)
-        if not time_match or not time_match.group(1):
-            await message.reply("Couldn't parse that time. Try something like `!remind 1h`, `!remind 30m`, `!remind 1h30m10s`")
-            return
-        time_str = time_match.group(1)
-        remind_msg = time_match.group(2).strip() if time_match.group(2) else None
-        hours = int(h.group(1)) if (h := re.search(r'(\d+)h', time_str, re.I)) else 0
-        minutes = int(m.group(1)) if (m := re.search(r'(\d+)m', time_str, re.I)) else 0
-        seconds = int(s.group(1)) if (s := re.search(r'(\d+)s', time_str, re.I)) else 0
-        total_seconds = hours * 3600 + minutes * 60 + seconds
-        if total_seconds <= 0:
-            await message.reply("Time must be greater than 0.")
-            return
-        if total_seconds > 86400:
-            await message.reply("Max reminder time is 24 hours.")
-            return
-        parts_str = []
-        if hours: parts_str.append(f"{hours}h")
-        if minutes: parts_str.append(f"{minutes}m")
-        if seconds: parts_str.append(f"{seconds}s")
-        await message.reply(f"Got it! Reminding you in {''.join(parts_str)}.")
-        async def send_reminder():
-            await asyncio.sleep(total_seconds)
-            reminder_text = f"{message.author.mention}, reminder!"
-            if remind_msg:
-                reminder_text += f" {remind_msg}"
-            await message.channel.send(reminder_text)
-        asyncio.create_task(send_reminder())
-        return
-
-    # !rank
-    if command == "!rank":
-        try:
-            entries = await fetch_all_leaderboard()
-        except Exception:
-            await message.reply("Couldn't reach the leaderboard API right now.")
-            return
-
-        subcommand = None
-
-        if arg:
-            arg_parts = arg.split(None, 1)
-            first = arg_parts[0].lower()
-            if first == "list":
-                page = 1
-                if len(arg_parts) > 1 and arg_parts[1].isdigit():
-                    page = int(arg_parts[1])
-                page_content, total_pages = build_leaderboard_page(entries, page)
-                view = LeaderboardView(entries, page, total_pages, message.author.id)
-                await message.reply(page_content, view=view)
-                return
-            elif first in ["data", "files", "file"]:
-                subcommand = first
-                if len(arg_parts) > 1:
-                    entry = find_user(entries, arg_parts[1])
-                else:
-                    entry = find_user_with_fallback(entries, message.author)
-            else:
-                entry = find_user(entries, arg)
-        else:
-            entry = find_user_with_fallback(entries, message.author)
-
-        if not entry:
-            await message.reply("Couldn't find that user on the leaderboard.")
-            return
-
-        if subcommand == "data":
-            await message.reply(f"**{entry['discord_username']}** has archived **{bytes_to_human(entry['total_bytes'])}** of data.")
-        elif subcommand in ["files", "file"]:
-            await message.reply(f"**{entry['discord_username']}** has archived **{entry['total_files']:,} files**.")
-        else:
-            await message.reply(
-                f"**{entry['discord_username']}** is rank **#{entry['rank']}** "
-                f"with {entry['total_files']:,} files and {bytes_to_human(entry['total_bytes'])} archived."
-            )
-        return
-
-    # !stats
-    if command == "!stats":
-        try:
-            entries = await fetch_all_leaderboard()
-        except Exception:
-            await message.reply("Couldn't reach the leaderboard API right now.")
-            return
-
-        entry = find_user_with_fallback(entries, message.author)
-
-        if not entry:
-            await message.reply("Couldn't find you on the leaderboard.")
-            return
-
-        if arg and arg.lower() == "files":
-            await message.reply(f"**{entry['discord_username']}** has archived **{entry['total_files']:,} files**.")
-        elif arg and arg.lower() == "data":
-            await message.reply(f"**{entry['discord_username']}** has archived **{bytes_to_human(entry['total_bytes'])}** of data.")
-        else:
-            await message.reply(
-                f"Stats for **{entry['discord_username']}**:\n"
-                f"Rank: **#{entry['rank']}**\n"
-                f"Files: **{entry['total_files']:,}**\n"
-                f"Data: **{bytes_to_human(entry['total_bytes'])}**"
-            )
-        return
-
-    # !help / !list / !cmd / !command
-    if content in ["!help", "!list", "!cmd", "!command"]:
-        await message.reply(HELP_TEXT)
-        return
 
     # Myrient shutdown question
     if "myrient" in content and any(re.search(r'\b' + re.escape(w) + r'\b', content) for w in ["shutdown", "shut down", "closing", "close", "end", "when"]):
@@ -319,8 +336,8 @@ async def on_message(message):
 
     # Good bot / bad bot / clanker - only if replying to the bot or mentioning it
     is_bot_referenced = (
-        (message.reference and message.reference.resolved and message.reference.resolved.author == client.user)
-        or client.user in message.mentions
+        (message.reference and message.reference.resolved and message.reference.resolved.author == bot.user)
+        or bot.user in message.mentions
     )
 
     if is_bot_referenced:
@@ -361,4 +378,4 @@ async def on_message(message):
         else:
             await message.add_reaction("❌")
 
-client.run(TOKEN)
+bot.run(TOKEN)

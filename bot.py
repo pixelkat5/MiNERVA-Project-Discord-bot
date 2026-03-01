@@ -52,6 +52,17 @@ async def on_message(message):
         await message.reply(f"Current ping is around `{latency}ms`")
         return
 
+    if content == "!time":
+        import datetime
+        deadline = datetime.datetime(2025, 3, 31, tzinfo=datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        if now < deadline:
+            timestamp = int(deadline.timestamp())
+            await message.reply(f"Myrient deadline: <t:{timestamp}:F> (<t:{timestamp}:R>)")
+        else:
+            await message.reply("The deadline has already passed.")
+        return
+
     if content == "!status":
         is_up = await check_site()
         if is_up:
@@ -60,7 +71,7 @@ async def on_message(message):
             await message.reply("❌ The site is down!")
         return
 
-    # Myrient shutdown question
+    # Myrient shutdown
     if "myrient" in content and any(w in content for w in ["shutdown", "shut down", "closing", "close", "end", "when"]):
         await message.reply("March 31st.")
         return

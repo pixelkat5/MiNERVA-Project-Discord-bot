@@ -46,6 +46,14 @@ async def on_message(message):
 
     content = message.content.lower()
 
+    if content == "!status":
+        is_up = await check_site()
+        if is_up:
+            await message.reply("✅ The site is up!")
+        else:
+            await message.reply("❌ The site is down!")
+        return
+
     # Good bot / bad bot / clanker — only if replying to the bot or mentioning it
     is_bot_referenced = (
         (message.reference and message.reference.resolved and message.reference.resolved.author == client.user)

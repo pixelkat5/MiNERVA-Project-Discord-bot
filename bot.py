@@ -7,19 +7,21 @@ import os
 import re
 import time
 import datetime
+import zoneinfo
 
 TOKEN = os.environ["DISCORD_TOKEN"]
 URL = "https://minerva-archive.org/"
 API_URL = "https://api.minerva-archive.org"
 GATE_URL = "https://gate.minerva-archive.org"
 LEADERBOARD_API = "https://minerva-archive.org/api/leaderboard"
-
 GIST_RAW_URL = "https://gist.githubusercontent.com/rlaphoenix/257b7aa65adacc154d8b5fa0b035b1e8/raw"
-COMMANDS_CHANNEL_ID = 1477718885502292164
 
-script_notify_users = set()  # user IDs who want update pings
-_last_known_version = None
+COMMANDS_CHANNEL_ID = 1477718885502292164
 ALLOWED_ROLES = {"Project Lead", "Manager", "LORD HOARDER", "Moderator", "Developer"}
+
+script_notify_users = set()
+_last_known_version = None
+user_timezones = {}  # user ID -> timezone string
 
 DOWN_KEYWORDS = [
     "down", "offline", "not working", "broken", "unreachable",
@@ -45,14 +47,13 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 async def check_channel(ctx):
-    # allow DMs
     if isinstance(ctx.channel, discord.DMChannel):
         return True
     if ctx.channel.id == COMMANDS_CHANNEL_ID:
         return True
     if any(r.name in ALLOWED_ROLES for r in getattr(ctx.author, 'roles', [])):
         return True
-    await ctx.reply(f"Commands can only be used in <#1477718885502292164>.", ephemeral=True)
+    await ctx.reply("Commands can only be used in <#1477718885502292164>.", ephemeral=True)
     return False
 
 async def fetch_script_version():
@@ -64,7 +65,7 @@ async def fetch_script_version():
                 text = await response.text()
                 for line in text.splitlines():
                     if line.strip().startswith("VERSION"):
-                        match = re.search(r'["\']([^"\']+)["\']', line)
+                        match = re.search(r'["\'"]([^"\']+)["\'""]', line)
                         if match:
                             return match.group(1)
     except Exception:
@@ -80,12 +81,34 @@ async def version_watcher():
             for user_id in list(script_notify_users):
                 try:
                     user = await bot.fetch_user(user_id)
-                    await user.send(f"Script updated! New version: `{version}` (was `{_last_known_version}`)\nhttps://gist.github.com/rlaphoenix/257b7aa65adacc154d8b5fa0b035b1e8")
+                    await user.send(
+                        f"Script updated! New version: `{version}` (was `{_last_known_version}`)\n"
+                        f"https://gist.github.com/rlaphoenix/257b7aa65adacc154d8b5fa0b035b1e8"
+                    )
                 except Exception:
                     pass
         if version:
             _last_known_version = version
-        await asyncio.sleep(300)  # check every 5 minutes
+        await asyncio.sleep(300)
+
+async def status_watcher():
+    await bot.wait_until_ready()
+    last_status = None
+    while not bot.is_closed():
+        is_up = await check_site()
+        if is_up != last_status:
+            if is_up:
+                await bot.change_presence(
+                    status=discord.Status.online,
+                    activity=discord.Activity(type=discord.ActivityType.watching, name="minerva-archive.org ✅")
+                )
+            else:
+                await bot.change_presence(
+                    status=discord.Status.do_not_disturb,
+                    activity=discord.Activity(type=discord.ActivityType.watching, name="minerva-archive.org 🔴")
+                )
+            last_status = is_up
+        await asyncio.sleep(60)
 
 async def check_site():
     try:
@@ -107,22 +130,7 @@ async def fetch_all_leaderboard():
     global _leaderboard_cache, _leaderboard_cache_time
     if _leaderboard_cache and (time.time() - _leaderboard_cache_time) < CACHE_TTL:
         return _leaderboard_cache
-    entries = []
-    offset = 0
-    limit = 25
-    async with aiohttp.ClientSession() as session:
-        while True:
-            url = f"{LEADERBOARD_API}?limit={limit}&offset={offset}"
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                if response.status != 200:
-                    break
-                batch = await response.json()
-                if not batch:
-                    break
-                entries.extend(batch)
-                if len(batch) < limit:
-                    break
-                offset += limit
+    entries = await fetch_leaderboard_fresh()
     _leaderboard_cache = entries
     _leaderboard_cache_time = time.time()
     return entries
@@ -191,7 +199,9 @@ HELP_TEXT = (
     "`!source / !sourcecode` - Link to the bot GitHub repo\n"
     "`!script` - Show current upload script version\n"
     "`!script notify` - Toggle DM pings for script updates\n"
-    "`!remind 1h30m (message)` - Set a reminder (supports h/m/s, max 24h)\n"
+    "`!remind 1h30m (message)` - Set a reminder by duration\n"
+    "`!remind 4/1/26` - Set a reminder by date (midnight in your timezone)\n"
+    "`!timezone US/Central` - Set your timezone for date reminders\n"
     "`!listen 2m 30s` - Track your data uploads over time (DMs you updates)\n"
     "`!rank` - See your leaderboard rank\n"
     "`!rank (username)` - See someone else's rank\n"
@@ -245,6 +255,7 @@ class LeaderboardView(discord.ui.View):
 async def on_ready():
     await bot.tree.sync()
     bot.loop.create_task(version_watcher())
+    bot.loop.create_task(status_watcher())
     print(f"Logged in as {bot.user}")
 
 @bot.hybrid_command(name="ping", description="Check bot latency")
@@ -323,13 +334,52 @@ async def script(ctx, action: str = None):
         else:
             await ctx.reply("Couldn't fetch the script version right now.")
 
-@bot.hybrid_command(name="remind", description="Set a reminder")
-@app_commands.describe(reminder="e.g. 1h30m do the thing")
+@bot.hybrid_command(name="timezone", description="Set your timezone for date reminders")
+@app_commands.describe(tz="e.g. US/Central, US/Eastern, US/Pacific, UTC")
+async def timezone_cmd(ctx, tz: str):
+    if not await check_channel(ctx): return
+    try:
+        zoneinfo.ZoneInfo(tz)
+        user_timezones[ctx.author.id] = tz
+        await ctx.reply(f"Timezone set to `{tz}`.", ephemeral=True)
+    except Exception:
+        await ctx.reply(f"Unknown timezone `{tz}`. Try something like `US/Central`, `US/Eastern`, `US/Pacific`, or `UTC`.", ephemeral=True)
+
+@bot.hybrid_command(name="remind", description="Set a reminder by duration or date")
+@app_commands.describe(reminder="e.g. 1h30m, 30m do the thing, or 4/1/26")
 async def remind(ctx, *, reminder: str):
     if not await check_channel(ctx): return
+
+    # check if it looks like a date (m/d/yy or m/d/yyyy)
+    date_match = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{2}|\d{4})$', reminder.strip())
+    if date_match:
+        month, day, year = int(date_match.group(1)), int(date_match.group(2)), int(date_match.group(3))
+        if year < 100:
+            year += 2000
+        tz_name = user_timezones.get(ctx.author.id, "US/Central")
+        try:
+            tz = zoneinfo.ZoneInfo(tz_name)
+            remind_dt = datetime.datetime(year, month, day, 0, 0, 0, tzinfo=tz)
+        except Exception:
+            await ctx.reply("Invalid date.")
+            return
+        now = datetime.datetime.now(tz=tz)
+        total_seconds = (remind_dt - now).total_seconds()
+        if total_seconds <= 0:
+            await ctx.reply("That date is in the past.")
+            return
+        timestamp = int(remind_dt.timestamp())
+        await ctx.reply(f"Got it! Reminding you on <t:{timestamp}:D> at midnight {tz_name}.")
+        async def send_date_reminder():
+            await asyncio.sleep(total_seconds)
+            await ctx.channel.send(f"{ctx.author.mention}, reminder! It's {month}/{day}/{year}.")
+        asyncio.create_task(send_date_reminder())
+        return
+
+    # otherwise parse as duration + optional message
     time_match = re.match(r'^((?:\d+h)?(?:\d+m)?(?:\d+s)?)\s*(.*)?$', reminder.strip(), re.IGNORECASE)
     if not time_match or not time_match.group(1):
-        await ctx.reply("Couldn't parse that time. Try something like `!remind 1h`, `!remind 30m`, `!remind 1h30m10s`")
+        await ctx.reply("Couldn't parse that. Try `!remind 1h30m`, `!remind 30m do the thing`, or `!remind 4/1/26`.")
         return
     time_str = time_match.group(1)
     remind_msg = time_match.group(2).strip() if time_match.group(2) else None
@@ -430,7 +480,7 @@ async def listen(ctx, *, args: str = None):
 
         new_content = "\n".join(snapshots)
         if len(new_content) > 1900:
-            snapshots = [f"*(continued)*"]
+            snapshots = ["*(continued)*"]
             dm = await ctx.author.send("\n".join(snapshots))
         else:
             await dm.edit(content=new_content)
@@ -453,8 +503,6 @@ async def rank(ctx, *, args: str = None):
         await ctx.reply("Couldn't reach the leaderboard API right now.")
         return
 
-    subcommand = None
-
     if args:
         arg_parts = args.split(None, 1)
         first = arg_parts[0].lower()
@@ -473,8 +521,10 @@ async def rank(ctx, *, args: str = None):
             else:
                 entry = find_user_with_fallback(entries, ctx.author)
         else:
+            subcommand = None
             entry = find_user(entries, args)
     else:
+        subcommand = None
         entry = find_user_with_fallback(entries, ctx.author)
 
     if not entry:
@@ -503,7 +553,6 @@ async def stats(ctx, filter: str = None):
         return
 
     entry = find_user_with_fallback(entries, ctx.author)
-
     if not entry:
         await ctx.reply("Couldn't find you on the leaderboard.")
         return
@@ -579,7 +628,6 @@ async def on_message(message):
 
     # Site status keywords
     has_site_keyword = any(re.search(r'\b' + re.escape(kw) + r'\b', content) for kw in SITE_KEYWORDS)
-
     if not has_site_keyword:
         return
 
@@ -591,7 +639,6 @@ async def on_message(message):
     if has_down_keyword:
         if not is_up:
             await message.reply("Be patient -_-")
-
     elif has_up_keyword:
         try:
             if is_up:

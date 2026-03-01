@@ -41,6 +41,9 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 async def check_channel(ctx):
+    # allow DMs
+    if isinstance(ctx.channel, discord.DMChannel):
+        return True
     if ctx.channel.id == COMMANDS_CHANNEL_ID:
         return True
     if any(r.name in ALLOWED_ROLES for r in getattr(ctx.author, 'roles', [])):

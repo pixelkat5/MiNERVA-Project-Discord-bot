@@ -345,6 +345,17 @@ async def timezone_cmd(ctx, tz: str):
     except Exception:
         await ctx.reply(f"Unknown timezone `{tz}`. Try something like `US/Central`, `US/Eastern`, `US/Pacific`, or `UTC`.", ephemeral=True)
 
+@bot.hybrid_command(name="pfp", description="Show a user's profile picture")
+@app_commands.describe(user="The user whose pfp to show (leave blank for yourself)")
+async def pfp(ctx, user: discord.Member = None):
+    if not await check_channel(ctx): return
+    target = user or ctx.author
+    avatar_url = target.display_avatar.url
+    embed = discord.Embed()
+    embed.set_image(url=avatar_url)
+    embed.set_footer(text=f"{target.display_name}'s profile picture")
+    await ctx.reply(embed=embed)
+
 @bot.hybrid_command(name="remind", description="Set a reminder by duration or date")
 @app_commands.describe(reminder="e.g. 1h30m, 30m do the thing, or 4/1/26")
 async def remind(ctx, *, reminder: str):

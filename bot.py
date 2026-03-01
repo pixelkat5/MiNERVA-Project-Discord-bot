@@ -15,10 +15,10 @@ DOWN_KEYWORDS = [
 
 # Up keywords
 UP_KEYWORDS = [
-    "up", "working", "back", "online", "accessible", "live"
+    "up", "working", "online", "accessible"
 ]
 
-# Check second keyword
+# Must also contain one of these to confirm they're talking about the site
 SITE_KEYWORDS = [
     "site", "minerva", "archive", "page", "website", "server"
 ]
@@ -45,6 +45,19 @@ async def on_message(message):
         return
 
     content = message.content.lower()
+
+    # Good bot / bad bot — only if replying to the bot
+    if message.reference and message.reference.resolved:
+        if message.reference.resolved.author == client.user:
+            if "good bot" in content:
+                await message.reply("yippie")
+                return
+            elif "bad bot" in content:
+                await message.reply("sorry...")
+                return
+            elif "clanker" in content:
+                await message.reply("we dont use that kind of language in this family friendly christian discord server")
+                return
 
     has_site_keyword = any(re.search(r'\b' + re.escape(kw) + r'\b', content) for kw in SITE_KEYWORDS)
 

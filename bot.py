@@ -10,6 +10,8 @@ import datetime
 
 TOKEN = os.environ["DISCORD_TOKEN"]
 URL = "https://minerva-archive.org/"
+API_URL = "https://api.minerva-archive.org"
+GATE_URL = "https://gate.minerva-archive.org"
 LEADERBOARD_API = "https://minerva-archive.org/api/leaderboard"
 
 DOWN_KEYWORDS = [
@@ -40,6 +42,14 @@ async def check_site():
         async with aiohttp.ClientSession() as session:
             async with session.get(URL, timeout=aiohttp.ClientTimeout(total=10)) as response:
                 return response.status == 200
+    except Exception:
+        return False
+
+async def check_url(url):
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                return response.status < 500
     except Exception:
         return False
 
@@ -165,8 +175,17 @@ async def ping(ctx):
 
 @bot.hybrid_command(name="status", description="Check if the site is up")
 async def status(ctx):
-    is_up = await check_site()
-    await ctx.reply("The site is up." if is_up else "The site is down.")
+    site, api, gate = await asyncio.gather(
+        check_url(URL),
+        check_url(API_URL),
+        check_url(GATE_URL),
+    )
+    def mark(up): return "up" if up else "down"
+    await ctx.reply(
+        f"minerva-archive.org: {mark(site)}\n"
+        f"api.minerva-archive.org: {mark(api)}\n"
+        f"gate.minerva-archive.org: {mark(gate)}"
+    )
 
 @bot.hybrid_command(name="time", description="Time left until Myrient deadline")
 async def time_cmd(ctx):

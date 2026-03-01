@@ -98,11 +98,12 @@ def build_leaderboard_page(entries, page, per_page=10):
     return "\n".join(lines), total_pages
 
 class LeaderboardView(discord.ui.View):
-    def __init__(self, entries, page, total_pages):
+    def __init__(self, entries, page, total_pages, author_id):
         super().__init__(timeout=60)
         self.entries = entries
         self.page = page
         self.total_pages = total_pages
+        self.author_id = author_id
         self.update_buttons()
 
     def update_buttons(self):
@@ -111,6 +112,9 @@ class LeaderboardView(discord.ui.View):
 
     @discord.ui.button(label="< Prev", style=discord.ButtonStyle.secondary)
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("Only the person who ran this command can use these buttons.", ephemeral=True)
+            return
         self.page -= 1
         self.update_buttons()
         content, _ = build_leaderboard_page(self.entries, self.page)
@@ -118,6 +122,9 @@ class LeaderboardView(discord.ui.View):
 
     @discord.ui.button(label="Next >", style=discord.ButtonStyle.secondary)
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("Only the person who ran this command can use these buttons.", ephemeral=True)
+            return
         self.page += 1
         self.update_buttons()
         content, _ = build_leaderboard_page(self.entries, self.page)
@@ -244,7 +251,7 @@ async def on_message(message):
                 if len(arg_parts) > 1 and arg_parts[1].isdigit():
                     page = int(arg_parts[1])
                 page_content, total_pages = build_leaderboard_page(entries, page)
-                view = LeaderboardView(entries, page, total_pages)
+                view = LeaderboardView(entries, page, total_pages, message.author.id)
                 await message.reply(page_content, view=view)
                 return
             elif first in ["data", "files", "file"]:

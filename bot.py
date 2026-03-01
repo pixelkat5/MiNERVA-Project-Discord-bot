@@ -113,7 +113,7 @@ class LeaderboardView(discord.ui.View):
     @discord.ui.button(label="< Prev", style=discord.ButtonStyle.secondary)
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.author_id:
-            await interaction.response.send_message("this is you only", ephemeral=True)
+            await interaction.response.defer()
             return
         self.page -= 1
         self.update_buttons()
@@ -123,7 +123,7 @@ class LeaderboardView(discord.ui.View):
     @discord.ui.button(label="Next >", style=discord.ButtonStyle.secondary)
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.author_id:
-            await interaction.response.send_message("this is you only", ephemeral=True)
+            await interaction.response.defer()
             return
         self.page += 1
         self.update_buttons()

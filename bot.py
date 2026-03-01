@@ -69,6 +69,12 @@ def find_user(entries, username):
             return e
     return None
 
+def find_user_with_fallback(entries, member):
+    entry = find_user(entries, member.display_name)
+    if not entry:
+        entry = find_user(entries, member.name)
+    return entry
+
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user}")
@@ -126,16 +132,17 @@ async def on_message(message):
             first = arg_parts[0].lower()
             if first in ["data", "files", "file"]:
                 subcommand = first
-                username = arg_parts[1] if len(arg_parts) > 1 else message.author.display_name
+                if len(arg_parts) > 1:
+                    entry = find_user(entries, arg_parts[1])
+                else:
+                    entry = find_user_with_fallback(entries, message.author)
             else:
-                username = arg
+                entry = find_user(entries, arg)
         else:
-            username = message.author.display_name
-
-        entry = find_user(entries, username)
+            entry = find_user_with_fallback(entries, message.author)
 
         if not entry:
-            await message.reply(f"Couldn't find **{username}** on the leaderboard.")
+            await message.reply("Couldn't find that user on the leaderboard.")
             return
 
         if subcommand == "data":
@@ -157,11 +164,10 @@ async def on_message(message):
             await message.reply("Couldn't reach the leaderboard API right now.")
             return
 
-        username = message.author.display_name
-        entry = find_user(entries, username)
+        entry = find_user_with_fallback(entries, message.author)
 
         if not entry:
-            await message.reply(f"Couldn't find **{username}** on the leaderboard.")
+            await message.reply("Couldn't find you on the leaderboard.")
             return
 
         if arg and arg.lower() == "files":
@@ -193,22 +199,10 @@ async def on_message(message):
         return
 
     # Myrient shutdown question
-    if "myrient" in content and any(w in content for w in ["shutdown", "shut down", "closing", "close", "end", "when"]):
+    if "myrient" in content and any(re.search(r'\b' + re.escape(w) + r'\b', content) for w in ["shutdown", "shut down", "closing", "close", "end", "when"]):
         await message.reply("March 31st.")
         return
 
-    # Auto-remove links
-    if re.search(r'https?://|www\.', message.content):
-        whitelisted = [
-            "tenor.com",
-            "giphy.com",
-            "minerva-archive.org",
-            "github.com",
-        ]
-        if not any(w in message.content for w in whitelisted):
-            await message.delete()
-            await message.channel.send(f"{message.author.mention}, sorry but we autoremove links to prevent piracy and our server getting taken down.")
-        return
 
     # Good bot / bad bot / clanker — only if replying to the bot or mentioning it
     is_bot_referenced = (

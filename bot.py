@@ -5,6 +5,7 @@ import re
 
 TOKEN = os.environ["DISCORD_TOKEN"]
 URL = "https://minerva-archive.org/"
+LEADERBOARD_API = "https://minerva-archive.org/api/leaderboard"
 
 # Primary trigger words
 DOWN_KEYWORDS = [
@@ -35,6 +36,39 @@ async def check_site():
     except Exception:
         return False
 
+async def fetch_all_leaderboard():
+    entries = []
+    offset = 0
+    limit = 25
+    async with aiohttp.ClientSession() as session:
+        while True:
+            url = f"{LEADERBOARD_API}?limit={limit}&offset={offset}"
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                if response.status != 200:
+                    break
+                batch = await response.json()
+                if not batch:
+                    break
+                entries.extend(batch)
+                if len(batch) < limit:
+                    break
+                offset += limit
+    return entries
+
+def bytes_to_human(b):
+    for unit in ["B", "KB", "MB", "GB", "TB"]:
+        if b < 1024:
+            return f"{b:.2f} {unit}"
+        b /= 1024
+    return f"{b:.2f} PB"
+
+def find_user(entries, username):
+    username = username.lower()
+    for e in entries:
+        if e["discord_username"].lower() == username:
+            return e
+    return None
+
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user}")
@@ -44,14 +78,27 @@ async def on_message(message):
     if message.author == client.user:
         return
 
-    content = message.content.lower()
+    content = message.content.lower().strip()
+    parts = message.content.strip().split(None, 1)
+    command = parts[0].lower() if parts else ""
+    arg = parts[1].strip() if len(parts) > 1 else None
 
-    # Commands
+    # !ping
     if content == "!ping":
         latency = round(client.latency * 1000)
-        await message.reply(f"Current ping is around `{latency}ms`")
+        await message.reply(f"Pong! `{latency}ms`")
         return
 
+    # !status
+    if content == "!status":
+        is_up = await check_site()
+        if is_up:
+            await message.reply("The site is up.")
+        else:
+            await message.reply("The site is down.")
+        return
+
+    # !time
     if content == "!time":
         import datetime
         deadline = datetime.datetime(2025, 3, 31, tzinfo=datetime.timezone.utc)
@@ -63,23 +110,85 @@ async def on_message(message):
             await message.reply("The deadline has already passed.")
         return
 
-    if content == "!status":
-        is_up = await check_site()
-        if is_up:
-            await message.reply("✅ The site is up!")
+    # !rank / !rank (username)
+    if command == "!rank":
+        try:
+            entries = await fetch_all_leaderboard()
+        except Exception:
+            await message.reply("Couldn't reach the leaderboard API right now.")
+            return
+
+        username = arg if arg else message.author.name
+        entry = find_user(entries, username)
+
+        if entry:
+            await message.reply(
+                f"**{entry['discord_username']}** is rank **#{entry['rank']}** "
+                f"with {entry['total_files']:,} files and {bytes_to_human(entry['total_bytes'])} archived."
+            )
         else:
-            await message.reply("❌ The site is down!")
+            await message.reply(f"Couldn't find **{username}** on the leaderboard.")
         return
 
-    # Myrient shutdown
+    # !stats / !stats files / !stats data
+    if command == "!stats":
+        try:
+            entries = await fetch_all_leaderboard()
+        except Exception:
+            await message.reply("Couldn't reach the leaderboard API right now.")
+            return
+
+        username = message.author.name
+        entry = find_user(entries, username)
+
+        if not entry:
+            await message.reply(f"Couldn't find **{username}** on the leaderboard.")
+            return
+
+        if arg and arg.lower() == "files":
+            await message.reply(f"**{entry['discord_username']}** has archived **{entry['total_files']:,} files**.")
+        elif arg and arg.lower() == "data":
+            await message.reply(f"**{entry['discord_username']}** has archived **{bytes_to_human(entry['total_bytes'])}** of data.")
+        else:
+            await message.reply(
+                f"Stats for **{entry['discord_username']}**:\n"
+                f"Rank: **#{entry['rank']}**\n"
+                f"Files: **{entry['total_files']:,}**\n"
+                f"Data: **{bytes_to_human(entry['total_bytes'])}**"
+            )
+        return
+
+    # !help
+    if content == "!help":
+        await message.reply(
+            "**Minerva Bot Commands:**\n"
+            "`!ping` — Check bot latency\n"
+            "`!status` — Check if the site is up\n"
+            "`!time` — Time left until Myrient deadline\n"
+            "`!rank` — See your leaderboard rank\n"
+            "`!rank (username)` — See someone else's rank\n"
+            "`!stats` — See your full stats\n"
+            "`!stats files` — See your file count\n"
+            "`!stats data` — See your data amount\n"
+        )
+        return
+
+    # Myrient shutdown question
     if "myrient" in content and any(w in content for w in ["shutdown", "shut down", "closing", "close", "end", "when"]):
         await message.reply("March 31st.")
         return
 
     # Auto-remove links
     if re.search(r'https?://|www\.', message.content):
-        await message.delete()
-        await message.channel.send(f"{message.author.mention}, sorry but we autoremove links to prevent piracy and our server getting taken down.")
+        whitelisted = [
+            "tenor.com",
+            "giphy.com",
+            "minerva-archive.org",
+            "github.com",
+        ]
+        if not any(w in message.content for w in whitelisted):
+            await message.delete()
+            await message.channel.send(f"{message.author.mention}, sorry but we autoremove links to prevent piracy and our server getting taken down.")
         return
 
     # Good bot / bad bot / clanker — only if replying to the bot or mentioning it

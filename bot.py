@@ -294,7 +294,7 @@ async def on_message(message):
         await message.reply("I love that dude1!11!1,.!!")
         return
 
-    if "myrient" in content and has_keyword(content, ["shutdown", "shut down", "closing", "close", "end", "when"]):
+    if "myrient" in content and has_keyword(content, ["shutdown", "shut down", "shutting down", "closing", "close down", "going down", "shut up shop", "march 31", "deadline"]):
         await message.reply("March 31st.")
         return
 

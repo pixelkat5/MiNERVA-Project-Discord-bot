@@ -18,6 +18,7 @@ ENDPOINTS = [
     ("api.minerva-archive.org",          "https://api.minerva-archive.org"),
     ("gate.minerva-archive.org",         "https://gate.minerva-archive.org"),
     ("gate.minerva-archive.org/api/upload", "https://gate.minerva-archive.org/api/upload"),
+    ("api.minerva-archive.org/api/jobs", "https://api.minerva-archive.org/api/jobs?count=4"),
 ]
 
 LEADERBOARD_API = "https://minerva-archive.org/api/leaderboard"

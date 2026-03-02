@@ -620,6 +620,11 @@ async def on_message(message):
 
     content = message.content.lower().strip()
 
+    # Error 426
+    if "426" in content:
+        await message.reply("Uploads are currently disabled -_-")
+        return
+
     # Myrient shutdown question
     if "myrient" in content and any(re.search(r'\b' + re.escape(w) + r'\b', content) for w in ["shutdown", "shut down", "closing", "close", "end", "when"]):
         await message.reply("March 31st.")

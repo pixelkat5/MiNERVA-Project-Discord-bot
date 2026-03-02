@@ -277,8 +277,9 @@ async def on_message(message):
     content = message.content.lower().strip()
 
     # Simple keyword responses — no channel restriction
-    if "boing" in content:
-        await message.reply("boing boing")
+    boing_count = len(re.findall(r'boing', content, re.IGNORECASE))
+    if boing_count > 0:
+        await message.reply(" ".join(["boing"] * (boing_count + 1)))
         return
 
     if "426" in content:

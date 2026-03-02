@@ -31,6 +31,7 @@ COMMANDS_CHANNEL_ID = 1477718885502292164
 ALLOWED_ROLES = {"Project Lead", "Manager", "LORD HOARDER", "Moderator", "Developer"}
 CACHE_TTL = 300
 
+
 DOWN_KEYWORDS = [
     "down", "offline", "not working", "broken", "unreachable",
     "cant access", "can't access", "unavailable", "not loading",
@@ -83,10 +84,11 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 # ---- HELPERS ----
 
+
 def has_keyword(content, keywords):
     return any(re.search(r'\b' + re.escape(kw) + r'\b', content) for kw in keywords)
 
-def bytes_to_human(b):
+
     for unit in ["B", "KB", "MB", "GB", "TB"]:
         if b < 1024:
             return f"{b:.2f} {unit}"
@@ -274,51 +276,8 @@ async def on_message(message):
     if message.author == bot.user:
         return
     await bot.process_commands(message)
+
     content = message.content.lower().strip()
-
-    # Simple keyword responses — no channel restriction
-    boing_count = len(re.findall(r'boing', content, re.IGNORECASE))
-    if boing_count > 0:
-        await message.reply(" ".join(["boing"] * (boing_count + 1)))
-        return
-
-    if "426" in content:
-        await message.reply("Uploads are currently disabled -_-")
-        return
-
-    if "carl" in content:
-        await message.reply("I hate that dude -3-")
-        return
-
-    if "love" in content and "minerva" in content:
-        await message.reply("I love that dude1!11!1,.!!")
-        return
-
-    if "myrient" in content and has_keyword(content, ["shutdown", "shut down", "shutting down", "closing", "close down", "going down", "shut up shop", "march 31", "deadline"]):
-        await message.reply("March 31st.")
-        return
-
-    is_bot_referenced = (
-        (message.reference and message.reference.resolved and message.reference.resolved.author == bot.user)
-        or bot.user in message.mentions
-    )
-    if is_bot_referenced:
-        responses = {
-            "good bot":  "thank you :)",
-            "bad bot":   "sorry...",
-        }
-        for trigger, reply in responses.items():
-            if trigger in content:
-                await message.reply(reply)
-                return
-        if "clanker" in content or "hate" in content:
-            await message.reply(":(")
-        elif "love" in content:
-            await message.reply("awww thanks <3")
-        elif content.strip() in {"hi", "hello", "hey", "hiya"}:
-            await message.reply("hello :)")
-        return
-
     if not has_keyword(content, SITE_KEYWORDS):
         return
 
@@ -331,6 +290,8 @@ async def on_message(message):
             await message.add_reaction("✅" if is_up else "❌")
         except discord.NotFound:
             pass
+
+
 
 # ---- COMMANDS ----
 
@@ -466,6 +427,7 @@ async def remind(ctx, *, reminder: str):
 @app_commands.describe(args="duration and optional interval e.g. '2m 30s'")
 async def listen(ctx, *, args: str = None):
     if not await check_channel(ctx): return
+    await ctx.defer(ephemeral=True)
     if not args:
         await ctx.reply("Usage: `!listen 2m` or `!listen 2m 30s`", ephemeral=True)
         return
@@ -530,7 +492,10 @@ async def listen(ctx, *, args: str = None):
             snapshots = ["*(continued)*"]
             dm = await ctx.author.send("\n".join(snapshots))
         else:
-            await dm.edit(content=new_content)
+            try:
+                await dm.edit(content=new_content)
+            except discord.DiscordServerError:
+                pass
 
     snapshots.append("**Done!**")
     new_content = "\n".join(snapshots)

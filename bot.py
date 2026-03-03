@@ -288,10 +288,7 @@ async def on_message(message):
         if not is_up:
             await message.reply("Be patient -_-")
     elif has_keyword(content, UP_KEYWORDS):
-        try:
-            await message.add_reaction("✅" if is_up else "❌")
-        except discord.NotFound:
-            pass
+        pass
 
 
 

@@ -4,21 +4,23 @@ from discord import app_commands
 import aiohttp
 import asyncio
 import os
+import json
 import re
 import time
 import datetime
 import zoneinfo
+import dotenv
+dotenv.load_dotenv()
 
-# ---- CONFIG ----
 
 TOKEN = os.environ["DISCORD_TOKEN"]
 
 ENDPOINTS = [
-    ("minerva-archive.org",              "https://minerva-archive.org/"),
-    ("api.minerva-archive.org",          "https://api.minerva-archive.org"),
-    ("gate.minerva-archive.org",         "https://gate.minerva-archive.org"),
-    ("gate.minerva-archive.org/api/upload", "https://gate.minerva-archive.org/api/upload"),
-    ("api.minerva-archive.org/api/jobs", "https://api.minerva-archive.org/api/jobs?count=4"),
+    ("Website",      "https://minerva-archive.org/"),
+    ("API",          "https://api.minerva-archive.org"),
+    ("Gate",         "https://gate.minerva-archive.org"),
+    ("Upload API",   "https://gate.minerva-archive.org/api/upload"),
+    ("Jobs API",     "https://api.minerva-archive.org/api/jobs?count=4"),
 ]
 
 LEADERBOARD_API = "https://minerva-archive.org/api/leaderboard"
@@ -27,10 +29,35 @@ GIST_RAW_URL    = "https://gist.githubusercontent.com/rlaphoenix/257b7aa65adacc1
 SHEET_URL       = "https://docs.google.com/spreadsheets/d/1FYHw-QYXnKFuzUhIZCIe3mmg8HR7ftg2sV9Ec_9cDwU/"
 SOURCE_URL      = "https://github.com/pixelkat5/MiNERVA-Project-Discord-bot"
 
-COMMANDS_CHANNEL_ID = 1477718885502292164
-ALLOWED_ROLES = {"Project Lead", "Manager", "LORD HOARDER", "Moderator", "Developer"}
-CACHE_TTL = 60
+EMOJI_CONFIG_PATH = "emojis.json"
 
+def load_emojis():
+    defaults = {
+        "success": "<:Success:1478105104522678385>",
+        "error": "<:Error:1478104593345937613>",
+        "loading": "<:Loading:1478104639357456465>",
+        "exception": "<:Exception:1478104619786702928>",
+        "retry": "<:Retry:1478105070552879256>",
+    }
+    try:
+        with open(EMOJI_CONFIG_PATH, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+            if isinstance(loaded, dict):
+                defaults.update({k: v for k, v in loaded.items() if isinstance(v, str)})
+    except Exception:
+        pass
+    return defaults
+
+EMOJIS = load_emojis()
+
+COMMANDS_CHANNEL_ID = 1477718885502292164
+ALLOWED_ROLES = {1477066811798327438, 1477069055805362226, 1476824457296482325, 1476743592750878821, 1476779056769925243}
+SUCCESS_EMOJI   = EMOJIS["success"]
+ERROR_EMOJI     = EMOJIS["error"]
+LOADING_EMOJI   = EMOJIS["loading"]
+EXCEPTION_EMOJI = EMOJIS["exception"]
+RETRY_EMOJI     = EMOJIS["retry"]
+CACHE_TTL = 300
 
 DOWN_KEYWORDS = [
     "down", "offline", "not working", "broken", "unreachable",
@@ -121,20 +148,91 @@ def find_user_with_fallback(entries, member):
 def build_leaderboard_page(entries, page, per_page=10):
     total_pages = (len(entries) + per_page - 1) // per_page
     start = (page - 1) * per_page
-    lines = [f"**Leaderboard - Page {page}/{total_pages}**"]
+    lines = []
     for e in entries[start:start + per_page]:
         lines.append(f"#{e['rank']} **{e['discord_username']}** - {e['total_files']:,} files, {bytes_to_human(e['total_bytes'])}")
-    return "\n".join(lines), total_pages
+    embed = discord.Embed(
+        title=f"Leaderboard - Page {page}/{total_pages}",
+        description="\n".join(lines) if lines else "No entries.",
+        color=discord.Color.gold()
+    )
+    return embed, total_pages
+
+def success_embed(description, title="Success"):
+    return discord.Embed(
+        title=f"{SUCCESS_EMOJI} {title}",
+        description=description,
+        color=discord.Color.green()
+    )
+
+def error_embed(description, title="Error"):
+    return discord.Embed(
+        title=f"{ERROR_EMOJI} {title}",
+        description=description,
+        color=discord.Color.red()
+    )
+
+def exception_embed(description, title="Exception"):
+    return discord.Embed(
+        title=f"{EXCEPTION_EMOJI} {title}",
+        description=description,
+        color=discord.Color.red()
+    )
+
+def retry_embed(description, title="Retry"):
+    return discord.Embed(
+        title=f"{RETRY_EMOJI} {title}",
+        description=description,
+        color=discord.Color.orange()
+    )
 
 async def check_channel(ctx):
     if isinstance(ctx.channel, discord.DMChannel):
         return True
     if ctx.channel.id == COMMANDS_CHANNEL_ID:
         return True
-    if any(r.name in ALLOWED_ROLES for r in getattr(ctx.author, 'roles', [])):
+    if any(r.id in ALLOWED_ROLES for r in getattr(ctx.author, 'roles', [])):
         return True
-    await ctx.reply("Commands can only be used in <#1477718885502292164>.", ephemeral=True)
+    await reply_ephemeral(ctx, embed=error_embed("Commands can only be used in <#1477718885502292164>."), ephemeral=True)
     return False
+
+async def reply_ephemeral(ctx, *args, **kwargs):
+    """Reply with ephemeral=True if supported, otherwise delete both messages after 7 seconds."""
+    try:
+        return await ctx.reply(*args, **kwargs)
+    except Exception:
+        # Ephemeral not supported (legacy command), send normal reply and schedule deletion
+        msg = await ctx.reply(*args, **{k: v for k, v in kwargs.items() if k != 'ephemeral'})
+        async def delete_messages():
+            await asyncio.sleep(7)
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+            try:
+                await ctx.message.delete()
+            except Exception:
+                pass
+        asyncio.create_task(delete_messages())
+        return msg
+
+async def add_loading_reaction(ctx):
+    message = getattr(ctx, "message", None)
+    if not message:
+        return None
+    try:
+        await message.add_reaction(LOADING_EMOJI)
+        return message
+    except Exception:
+        return None
+
+async def clear_loading_reaction(message):
+    if not message or not bot.user:
+        return
+    try:
+        await message.remove_reaction(LOADING_EMOJI, bot.user)
+    except Exception:
+        pass
 
 async def check_url(url):
     try:
@@ -185,14 +283,15 @@ async def get_leaderboard_or_error(ctx):
     try:
         return await fetch_all_leaderboard()
     except Exception:
-        await ctx.reply("Couldn't reach the leaderboard API right now.")
+        await ctx.reply(embed=error_embed("Couldn't reach the leaderboard API right now."))
         return None
 
 def make_link_command(name, url, description):
     @bot.hybrid_command(name=name, description=description)
     async def _cmd(ctx):
         if not await check_channel(ctx): return
-        await ctx.reply(url)
+        embed = discord.Embed(title=description, url=url, color=discord.Color.blurple())
+        await ctx.reply(embed=embed)
     _cmd.__name__ = f"{name}_cmd"
     return _cmd
 
@@ -207,7 +306,11 @@ async def version_watcher():
             for user_id in list(script_notify_users):
                 try:
                     user = await bot.fetch_user(user_id)
-                    await user.send(f"Script updated! New version: `{version}` (was `{_last_known_version}`)\n{DOWNLOAD_URL}")
+                    embed = success_embed(
+                        f"New version: `{version}` (was `{_last_known_version}`)\n{GIST_URL}",
+                        title="Script Updated"
+                    )
+                    await user.send(embed=embed)
                 except Exception:
                     pass
         if version:
@@ -244,7 +347,7 @@ class LeaderboardView(discord.ui.View):
 
     async def _check_author(self, interaction):
         if interaction.user.id != self.author_id:
-            await interaction.response.send_message("These buttons are only for the person who ran this command.", ephemeral=True)
+            await interaction.response.send_message(embed=error_embed("These buttons are only for the person who ran this command."), ephemeral=True)
             return False
         return True
 
@@ -252,8 +355,8 @@ class LeaderboardView(discord.ui.View):
         if not await self._check_author(interaction): return
         self.page += delta
         self.update_buttons()
-        content, _ = build_leaderboard_page(self.entries, self.page)
-        await interaction.response.edit_message(content=content, view=self)
+        embed, _ = build_leaderboard_page(self.entries, self.page)
+        await interaction.response.edit_message(embed=embed, view=self)
 
     @discord.ui.button(label="< Prev", style=discord.ButtonStyle.secondary)
     async def prev_button(self, interaction, button): await self._flip(interaction, -1)
@@ -278,6 +381,50 @@ async def on_message(message):
     if message.author == bot.user:
         return
     await bot.process_commands(message)
+    content = message.content.lower().strip()
+
+    # Simple keyword responses — no channel restriction
+    boing_count = len(re.findall(r'boing', content, re.IGNORECASE))
+    if boing_count > 0:
+        await message.reply(embed=success_embed(" ".join(["boing"] * (boing_count + 1)), title="Boing"))
+        return
+    
+    if "426" in content:
+        await message.reply(embed=error_embed("Uploads are currently disabled -_-"))
+        return
+
+    if "carl" in content:
+        await message.reply(embed=error_embed("I hate that dude -3-", title="Nope"))
+        return
+
+    if "love" in content and "minerva" in content:
+        await message.reply(embed=success_embed("I love that dude1!11!1,.!!", title="Love"))
+        return
+
+    if "myrient" in content and has_keyword(content, ["shutdown", "shut down", "shutting down", "closing", "close down", "going down", "shut up shop", "march 31", "deadline"]):
+        await message.reply(embed=discord.Embed(title="Myrient Deadline", description="March 31st.", color=discord.Color.orange()))
+        return
+
+    is_bot_referenced = (
+        (message.reference and message.reference.resolved and message.reference.resolved.author == bot.user)
+        or bot.user in message.mentions
+    )
+    if is_bot_referenced:
+        responses = {
+            "good bot":  "thank you :)",
+            "bad bot":   "sorry...",
+        }
+        for trigger, reply in responses.items():
+            if trigger in content:
+                await message.reply(embed=success_embed(reply, title="Reply"))
+                return
+        if "clanker" in content or "hate" in content:
+            await message.reply(embed=error_embed(":(", title="Reply"))
+        elif "love" in content:
+            await message.reply(embed=success_embed("awww thanks <3", title="Reply"))
+        elif content.strip() in {"hi", "hello", "hey", "hiya"}:
+            await message.reply(embed=success_embed("hello :)", title="Reply"))
+        return
 
     content = message.content.lower().strip()
     if not has_keyword(content, SITE_KEYWORDS):
@@ -286,10 +433,10 @@ async def on_message(message):
     is_up = await check_all_endpoints()
     if has_keyword(content, DOWN_KEYWORDS):
         if not is_up:
-            await message.reply("Be patient -_-")
+            await message.reply(embed=retry_embed("Be patient -_-"))
     elif has_keyword(content, UP_KEYWORDS):
         try:
-            await message.add_reaction("✅" if is_up else "❌")
+            await message.add_reaction(SUCCESS_EMOJI if is_up else ERROR_EMOJI)
         except discord.NotFound:
             pass
 
@@ -300,23 +447,32 @@ async def on_message(message):
 @bot.hybrid_command(name="ping", description="Check bot latency")
 async def ping(ctx):
     if not await check_channel(ctx): return
-    await ctx.reply(f"Pong! `{round(bot.latency * 1000)}ms`")
+    embed = discord.Embed(title="Pong!", description=f"`{round(bot.latency * 1000)}ms`", color=discord.Color.blue())
+    await ctx.reply(embed=embed)
 
 @bot.hybrid_command(name="status", description="Check if all services are up")
 @app_commands.describe(mode="leave blank for full check, or 'fast 1-4' for a single endpoint")
 async def status(ctx, mode: str = None, endpoint: int = None):
     if not await check_channel(ctx): return
-    await ctx.defer()
-    mark = lambda up: "🟢" if up else "🔴"
-    if mode and mode.lower() == "fast" and endpoint:
-        if not 1 <= endpoint <= 4:
-            await ctx.reply("Endpoint must be 1-4.")
-            return
-        name, url = ENDPOINTS[endpoint - 1]
-        await ctx.reply(f"{name}: {mark(await check_url(url))}")
-    else:
-        results = await asyncio.gather(*[check_url(url) for _, url in ENDPOINTS])
-        await ctx.reply("\n".join(f"{name}: {mark(up)}" for (name, _), up in zip(ENDPOINTS, results)))
+    loading_message = await add_loading_reaction(ctx)
+    try:
+        await ctx.defer()
+        mark = lambda up: SUCCESS_EMOJI if up else ERROR_EMOJI
+        if mode and mode.lower() == "fast" and endpoint:
+            if not 1 <= endpoint <= 4:
+                await ctx.reply(embed=error_embed("Endpoint must be 1-4."))
+                return
+            name, url = ENDPOINTS[endpoint - 1]
+            status_text = mark(await check_url(url))
+            embed = discord.Embed(title="Service Status", description=f"{name}: {status_text}", color=discord.Color.green())
+            await ctx.reply(embed=embed)
+        else:
+            results = await asyncio.gather(*[check_url(url) for _, url in ENDPOINTS])
+            status_lines = [f"{name}: {mark(up)}" for (name, _), up in zip(ENDPOINTS, results)]
+            embed = discord.Embed(title="All Services Status", description="\n".join(status_lines), color=discord.Color.green())
+            await ctx.reply(embed=embed)
+    finally:
+        await clear_loading_reaction(loading_message)
 
 @bot.hybrid_command(name="time", description="Time left until Myrient deadline")
 async def time_cmd(ctx):
@@ -325,9 +481,10 @@ async def time_cmd(ctx):
     now = datetime.datetime.now(datetime.timezone.utc)
     if now < deadline:
         ts = int(deadline.timestamp())
-        await ctx.reply(f"Myrient deadline: <t:{ts}:F> (<t:{ts}:R>)")
+        embed = discord.Embed(title="Myrient Deadline", description=f"<t:{ts}:F>\n(<t:{ts}:R>)", color=discord.Color.orange())
+        await ctx.reply(embed=embed)
     else:
-        await ctx.reply("The deadline has already passed.")
+        await ctx.reply(embed=error_embed("The deadline has already passed.", title="Deadline"))
 
 # Link commands
 DOWNLOAD_URL = "https://minerva-archive.org/worker/download"
@@ -340,12 +497,14 @@ make_link_command("download", DOWNLOAD_URL, "Link to the Minerva worker download
 @bot.command(name="bot")
 async def bot_cmd(ctx):
     if not await check_channel(ctx): return
-    await ctx.reply(DOWNLOAD_URL)
+    embed = discord.Embed(title="Bot Source", url=GIST_URL, color=discord.Color.blurple())
+    await ctx.reply(embed=embed)
 
 @bot.command(name="sourcecode")
 async def sourcecode_cmd(ctx):
     if not await check_channel(ctx): return
-    await ctx.reply(SOURCE_URL)
+    embed = discord.Embed(title="Source Code", url=SOURCE_URL, color=discord.Color.blurple())
+    await ctx.reply(embed=embed)
 
 @bot.hybrid_command(name="script", description="Show script version or toggle update notifications")
 @app_commands.describe(action="leave blank for version, or 'notify' to toggle update pings")
@@ -354,13 +513,17 @@ async def script(ctx, action: str = None):
     if action and action.lower() == "notify":
         if ctx.author.id in script_notify_users:
             script_notify_users.discard(ctx.author.id)
-            await ctx.reply("You'll no longer be pinged for script updates.", ephemeral=True)
+            await reply_ephemeral(ctx, embed=success_embed("You'll no longer be pinged for script updates."), ephemeral=True)
         else:
             script_notify_users.add(ctx.author.id)
-            await ctx.reply("You'll now be pinged via DM when the script updates.", ephemeral=True)
+            await reply_ephemeral(ctx, embed=success_embed("You'll now be pinged via DM when the script updates."), ephemeral=True)
     else:
         version = await fetch_script_version()
-        await ctx.reply(f"Current script version: `{version}`\n{DOWNLOAD_URL}" if version else "Couldn't fetch the script version right now.")
+        if version:
+            embed = discord.Embed(title="Script Version", description=f"`{version}`\n[View on GitHub]({GIST_URL})", color=discord.Color.blurple())
+        else:
+            embed = error_embed("Couldn't fetch the script version right now.")
+        await ctx.reply(embed=embed)
 
 @bot.hybrid_command(name="timezone", description="Set your timezone for date reminders")
 @app_commands.describe(tz="e.g. US/Central, US/Eastern, US/Pacific, UTC")
@@ -369,9 +532,9 @@ async def timezone_cmd(ctx, tz: str):
     try:
         zoneinfo.ZoneInfo(tz)
         user_timezones[ctx.author.id] = tz
-        await ctx.reply(f"Timezone set to `{tz}`.", ephemeral=True)
+        await reply_ephemeral(ctx, embed=success_embed(f"Your timezone is now `{tz}`.", title="Timezone Set"), ephemeral=True)
     except Exception:
-        await ctx.reply(f"Unknown timezone `{tz}`. Try `US/Central`, `US/Eastern`, `US/Pacific`, or `UTC`.", ephemeral=True)
+        await reply_ephemeral(ctx, embed=error_embed(f"Unknown timezone `{tz}`. Try `US/Central`, `US/Eastern`, `US/Pacific`, or `UTC`."), ephemeral=True)
 
 @bot.hybrid_command(name="pfp", description="Show a user's profile picture")
 @app_commands.describe(user="The user whose pfp to show (leave blank for yourself)")
@@ -397,35 +560,39 @@ async def remind(ctx, *, reminder: str):
             tz = zoneinfo.ZoneInfo(tz_name)
             remind_dt = datetime.datetime(year, month, day, tzinfo=tz)
         except Exception:
-            await ctx.reply("Invalid date.")
+            await ctx.reply(embed=error_embed("Invalid date."))
             return
         total_seconds = (remind_dt - datetime.datetime.now(tz=tz)).total_seconds()
         if total_seconds <= 0:
-            await ctx.reply("That date is in the past.")
+            await ctx.reply(embed=error_embed("That date is in the past."))
             return
-        await ctx.reply(f"Got it! Reminding you on <t:{int(remind_dt.timestamp())}:D> at midnight {tz_name}.")
+        await ctx.reply(embed=success_embed(f"Reminding you on <t:{int(remind_dt.timestamp())}:D> at midnight {tz_name}.", title="Reminder Set"))
         async def send_date_reminder():
             await asyncio.sleep(total_seconds)
-            await ctx.channel.send(f"{ctx.author.mention}, reminder! It's {month}/{day}/{year}.")
+            await ctx.channel.send(embed=success_embed(f"{ctx.author.mention}, reminder! It's {month}/{day}/{year}.", title="Reminder"))
         asyncio.create_task(send_date_reminder())
         return
 
     time_match = re.match(r'^((?:\d+h)?(?:\d+m)?(?:\d+s)?)\s*(.*)?$', reminder.strip(), re.IGNORECASE)
     if not time_match or not time_match.group(1):
-        await ctx.reply("Couldn't parse that. Try `!remind 1h30m`, `!remind 30m do the thing`, or `!remind 4/1/26`.")
+        embed = error_embed("Couldn't parse that. Try `!remind 1h30m`, `!remind 30m do the thing`, or `!remind 4/1/26`.")
+        await ctx.reply(embed=embed)
         return
     total_seconds = parse_time_str(time_match.group(1))
     remind_msg = time_match.group(2).strip() or None
     if total_seconds <= 0:
-        await ctx.reply("Time must be greater than 0.")
+        embed = error_embed("Time must be greater than 0.")
+        await ctx.reply(embed=embed)
         return
     if total_seconds > 86400:
-        await ctx.reply("Max reminder time is 24 hours.")
+        embed = error_embed("Max reminder time is 24 hours.")
+        await ctx.reply(embed=embed)
         return
-    await ctx.reply(f"Got it! Reminding you in {format_duration(total_seconds)}.")
+    embed = success_embed(f"Reminding you in {format_duration(total_seconds)}.", title="Reminder Set")
+    await ctx.reply(embed=embed)
     async def send_reminder():
         await asyncio.sleep(total_seconds)
-        await ctx.channel.send(f"{ctx.author.mention}, reminder!{' ' + remind_msg if remind_msg else ''}")
+        await ctx.channel.send(embed=success_embed(f"{ctx.author.mention}, reminder!{' ' + remind_msg if remind_msg else ''}", title="Reminder"))
     asyncio.create_task(send_reminder())
 
 @bot.hybrid_command(name="listen", description="Track your data uploads over time via DM")
@@ -434,33 +601,33 @@ async def listen(ctx, *, args: str = None):
     if not await check_channel(ctx): return
     await ctx.defer(ephemeral=True)
     if not args:
-        await ctx.reply("Usage: `!listen 2m` or `!listen 2m 30s`", ephemeral=True)
+        await reply_ephemeral(ctx, embed=discord.Embed(title="Usage", description="Usage: `!listen 2m` or `!listen 2m 30s`", color=discord.Color.blue()), ephemeral=True)
         return
 
     args = re.sub(r'^self\s+', '', args.strip(), flags=re.IGNORECASE)
     time_tokens = re.findall(r'\d+[hms]', args, re.IGNORECASE)
     if not time_tokens:
-        await ctx.reply("Couldn't parse a duration. Try `!listen 2m` or `!listen 2m 30s`", ephemeral=True)
+        await reply_ephemeral(ctx, embed=error_embed("Couldn't parse a duration. Try `!listen 2m` or `!listen 2m 30s`"), ephemeral=True)
         return
 
     duration = parse_time_str(time_tokens[0])
     interval = parse_time_str(time_tokens[1]) if len(time_tokens) > 1 else 30
 
     if duration <= 0 or interval <= 0:
-        await ctx.reply("Duration and interval must be greater than 0.", ephemeral=True)
+        await reply_ephemeral(ctx, embed=error_embed("Duration and interval must be greater than 0."), ephemeral=True)
         return
     if duration > 3600:
-        await ctx.reply("Max listen duration is 1 hour.", ephemeral=True)
+        await reply_ephemeral(ctx, embed=error_embed("Max listen duration is 1 hour."), ephemeral=True)
         return
     if interval < 10:
-        await ctx.reply("Minimum interval is 10 seconds.", ephemeral=True)
+        await reply_ephemeral(ctx, embed=error_embed("Minimum interval is 10 seconds."), ephemeral=True)
         return
 
     entries = await get_leaderboard_or_error(ctx)
     if entries is None: return
     entry = find_user_with_fallback(entries, ctx.author)
     if not entry:
-        await ctx.reply("Couldn't find you on the leaderboard.", ephemeral=True)
+        await reply_ephemeral(ctx, embed=error_embed("Couldn't find you on the leaderboard."), ephemeral=True)
         return
 
     username, prev_bytes = entry['discord_username'], entry['total_bytes']
@@ -469,14 +636,21 @@ async def listen(ctx, *, args: str = None):
         f"**Start:** {bytes_to_human(prev_bytes)}",
     ]
 
+    def build_listen_embed(lines):
+        return discord.Embed(
+            title=f"{LOADING_EMOJI} Upload Tracking",
+            description="\n".join(lines),
+            color=discord.Color.blurple()
+        )
+
     try:
-        dm = await ctx.author.send("\n".join(snapshots))
+        dm = await ctx.author.send(embed=build_listen_embed(snapshots))
     except discord.Forbidden:
-        await ctx.reply("I couldn't DM you. Please enable DMs from server members.", ephemeral=True)
+        await reply_ephemeral(ctx, embed=error_embed("I couldn't DM you. Please enable DMs from server members."), ephemeral=True)
         return
 
     if not isinstance(ctx.channel, discord.DMChannel):
-        await ctx.reply("Check your DMs for live updates!", ephemeral=True)
+        await reply_ephemeral(ctx, embed=success_embed("Check your DMs for live updates!"), ephemeral=True)
 
     elapsed = 0
     while elapsed < duration:
@@ -493,87 +667,103 @@ async def listen(ctx, *, args: str = None):
             snapshots.append(f"**t+{elapsed}s:** (fetch failed)")
 
         new_content = "\n".join(snapshots)
-        if len(new_content) > 1900:
+        if len(new_content) > 3900:
             snapshots = ["*(continued)*"]
-            dm = await ctx.author.send("\n".join(snapshots))
+            dm = await ctx.author.send(embed=build_listen_embed(snapshots))
         else:
-            try:
-                await dm.edit(content=new_content)
-            except discord.DiscordServerError:
-                pass  # transient Discord outage, retry next interval
+            await dm.edit(embed=build_listen_embed(snapshots))
 
     snapshots.append("**Done!**")
     new_content = "\n".join(snapshots)
-    if len(new_content) > 1900:
-        await ctx.author.send("**Done!**")
+    if len(new_content) > 3900:
+        await ctx.author.send(embed=success_embed("Done!", title="Upload Tracking"))
     else:
-        await dm.edit(content=new_content)
+        await dm.edit(embed=build_listen_embed(snapshots))
 
 @bot.hybrid_command(name="rank", description="See leaderboard rank")
 @app_commands.describe(args="username, 'list', 'data', or 'files' optionally followed by username")
 async def rank(ctx, *, args: str = None):
     if not await check_channel(ctx): return
-    await ctx.defer()
-    entries = await get_leaderboard_or_error(ctx)
-    if entries is None: return
+    loading_message = await add_loading_reaction(ctx)
+    try:
+        await ctx.defer()
+        entries = await get_leaderboard_or_error(ctx)
+        if entries is None: return
 
-    subcommand = None
-    if args:
-        arg_parts = args.split(None, 1)
-        first = arg_parts[0].lower()
-        if first == "list":
-            page = int(arg_parts[1]) if len(arg_parts) > 1 and arg_parts[1].isdigit() else 1
-            content, total_pages = build_leaderboard_page(entries, page)
-            await ctx.reply(content, view=LeaderboardView(entries, page, total_pages, ctx.author.id))
-            return
-        elif first in ["data", "files", "file"]:
-            subcommand = first
-            entry = find_user(entries, arg_parts[1]) if len(arg_parts) > 1 else find_user_with_fallback(entries, ctx.author)
+        subcommand = None
+        if args:
+            arg_parts = args.split(None, 1)
+            first = arg_parts[0].lower()
+            if first == "list":
+                page = int(arg_parts[1]) if len(arg_parts) > 1 and arg_parts[1].isdigit() else 1
+                embed, total_pages = build_leaderboard_page(entries, page)
+                await ctx.reply(embed=embed, view=LeaderboardView(entries, page, total_pages, ctx.author.id))
+                return
+            elif first in ["data", "files", "file"]:
+                subcommand = first
+                entry = find_user(entries, arg_parts[1]) if len(arg_parts) > 1 else find_user_with_fallback(entries, ctx.author)
+            else:
+                entry = find_user(entries, args)
         else:
-            entry = find_user(entries, args)
-    else:
-        entry = find_user_with_fallback(entries, ctx.author)
+            entry = find_user_with_fallback(entries, ctx.author)
 
-    if not entry:
-        await ctx.reply("Couldn't find that user on the leaderboard.")
-        return
+        if not entry:
+            embed = error_embed("Couldn't find that user on the leaderboard.")
+            await ctx.reply(embed=embed)
+            return
 
-    name = entry['discord_username']
-    if subcommand == "data":
-        await ctx.reply(f"**{name}** has archived **{bytes_to_human(entry['total_bytes'])}** of data.")
-    elif subcommand in ["files", "file"]:
-        await ctx.reply(f"**{name}** has archived **{entry['total_files']:,} files**.")
-    else:
-        await ctx.reply(f"**{name}** is rank **#{entry['rank']}** with {entry['total_files']:,} files and {bytes_to_human(entry['total_bytes'])} archived.")
+        name = entry['discord_username']
+        if subcommand == "data":
+            embed = discord.Embed(title="Archived Data", description=f"**{name}** has archived **{bytes_to_human(entry['total_bytes'])}** of data.", color=discord.Color.blue())
+            await ctx.reply(embed=embed)
+        elif subcommand in ["files", "file"]:
+            embed = discord.Embed(title="Archived Files", description=f"**{name}** has archived **{entry['total_files']:,} files**.", color=discord.Color.blue())
+            await ctx.reply(embed=embed)
+        else:
+            embed = discord.Embed(title="Leaderboard Rank", color=discord.Color.gold())
+            embed.add_field(name="User", value=name, inline=False)
+            embed.add_field(name="Rank", value=f"#{entry['rank']}", inline=True)
+            embed.add_field(name="Files", value=f"{entry['total_files']:,}", inline=True)
+            embed.add_field(name="Data", value=bytes_to_human(entry['total_bytes']), inline=True)
+            await ctx.reply(embed=embed)
+    finally:
+        await clear_loading_reaction(loading_message)
 
 @bot.hybrid_command(name="stats", description="See your archive stats")
 @app_commands.describe(filter="'files' or 'data'")
 async def stats(ctx, filter: str = None):
     if not await check_channel(ctx): return
-    await ctx.defer()
-    entries = await get_leaderboard_or_error(ctx)
-    if entries is None: return
-    entry = find_user_with_fallback(entries, ctx.author)
-    if not entry:
-        await ctx.reply("sorry but we couldn't find you on the leaderboard. pwp")
-        return
+    loading_message = await add_loading_reaction(ctx)
+    try:
+        await ctx.defer()
+        entries = await get_leaderboard_or_error(ctx)
+        if entries is None: return
+        entry = find_user_with_fallback(entries, ctx.author)
+        if not entry:
+            embed = error_embed("sorry but we couldn't find you on the leaderboard. pwp")
+            await ctx.reply(embed=embed)
+            return
 
-    name = entry['discord_username']
-    if filter and filter.lower() == "files":
-        await ctx.reply(f"**{name}** has archived **{entry['total_files']:,} files**.")
-    elif filter and filter.lower() == "data":
-        await ctx.reply(f"**{name}** has archived **{bytes_to_human(entry['total_bytes'])}** of data.")
-    else:
-        await ctx.reply(
-            f"Stats for **{name}**:\n"
-            f"Rank: **#{entry['rank']}**\n"
-            f"Files: **{entry['total_files']:,}**\n"
-            f"Data: **{bytes_to_human(entry['total_bytes'])}**"
-        )
+        name = entry['discord_username']
+        if filter and filter.lower() == "files":
+            embed = discord.Embed(title="Archived Files", description=f"**{name}** has archived **{entry['total_files']:,} files**.", color=discord.Color.blue())
+            await ctx.reply(embed=embed)
+        elif filter and filter.lower() == "data":
+            embed = discord.Embed(title="Archived Data", description=f"**{name}** has archived **{bytes_to_human(entry['total_bytes'])}** of data.", color=discord.Color.blue())
+            await ctx.reply(embed=embed)
+        else:
+            embed = discord.Embed(title=f"Stats for {name}", color=discord.Color.purple())
+            embed.add_field(name="Rank", value=f"#{entry['rank']}", inline=True)
+            embed.add_field(name="Files", value=f"{entry['total_files']:,}", inline=True)
+            embed.add_field(name="Data", value=bytes_to_human(entry['total_bytes']), inline=True)
+            await ctx.reply(embed=embed)
+    finally:
+        await clear_loading_reaction(loading_message)
 
 async def _send_help(ctx):
     if not await check_channel(ctx): return
-    await ctx.reply(HELP_TEXT)
+    embed = discord.Embed(title="Minerva Bot Commands", description=HELP_TEXT, color=discord.Color.blurple())
+    await ctx.reply(embed=embed)
 
 @bot.hybrid_command(name="help", description="Show all commands")
 async def help_cmd(ctx): await _send_help(ctx)

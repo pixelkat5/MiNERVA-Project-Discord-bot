@@ -14,14 +14,11 @@ import zoneinfo
 TOKEN = os.environ["DISCORD_TOKEN"]
 
 ENDPOINTS = [
-    ("minerva-archive.org",              "https://minerva-archive.org/"),
-    ("api.minerva-archive.org",          "https://api.minerva-archive.org"),
-    ("gate.minerva-archive.org",         "https://gate.minerva-archive.org"),
-    ("gate.minerva-archive.org/api/upload", "https://gate.minerva-archive.org/api/upload"),
-    ("api.minerva-archive.org/api/jobs", "https://api.minerva-archive.org/api/jobs?count=4"),
+    ("firehose.minerva-archive.org/api/stats",       "https://firehose.minerva-archive.org/api/stats"),
+    ("firehose.minerva-archive.org/api/leaderboard", "https://firehose.minerva-archive.org/api/leaderboard"),
 ]
 
-LEADERBOARD_API = "https://minerva-archive.org/api/leaderboard"
+LEADERBOARD_API = "https://firehose.minerva-archive.org/api/leaderboard"
 GIST_URL        = "https://gist.github.com/rlaphoenix/257b7aa65adacc154d8b5fa0b035b1e8"
 GIST_RAW_URL    = "https://gist.githubusercontent.com/rlaphoenix/257b7aa65adacc154d8b5fa0b035b1e8/raw"
 SHEET_URL       = "https://docs.google.com/spreadsheets/d/1FYHw-QYXnKFuzUhIZCIe3mmg8HR7ftg2sV9Ec_9cDwU/"
